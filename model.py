@@ -6,65 +6,93 @@ from gymnasium import spaces
 
 @dataclass
 class SocioEconomicConfig:
-    # On réduit le coût du confinement (était 5.0) pour inciter l'agent à l'utiliser
+    """
+    Paramètres économiques normalisés en "jours de PIB à confinement total".
+    Unité de référence : C_eco = 1 ≡ coût d'un confinement total / jour (~2 Md€).
+    Voir rapport projet.tex, sections 2.3–2.4.
+    """
+
+    # C_eco : coût confinement total / jour (unité de référence = 1)
     confinement_eco_cost: float = 1.0
-    # On réduit drastiquement le coût du vaccin (était 2.0) pour le rendre viable
-    vaccination_eco_cost: float = 0.1
-    # On augmente massivement le coût de la vie (était 100.0)
-    # 1000.0 signifie que sauver 1% de la population vaut 1000 jours de PIB.
+
+    # C_vacc : ~10 M€/jour à plein régime / 2 Md€/jour ≈ 0.005
+    #   (21.5€/dose × 2 doses + logistique ≈ 53€/pers, ×335k pers/jour)
+    vaccination_eco_cost: float = 0.005
+
+    # C_vie : valeur stat. vie humaine (3 M€) × pop / C_eco_jour ≈ 100
+    #   On amplifie (×10) pour prioriser les vies humaines
     life_cost: float = 1000.0
-    # On augmente le coût de l'infection (était 5.0) pour éviter la saturation
-    infection_cost: float = 50.0
-    max_vacc_rate: float = 0.005  # 0.5% par jour max (plus réaliste que 2%)
+
+    # C_hosp : coût hospitalier + arrêt maladie par infecté / jour
+    #   ~580€/patient/jour (source éval. sécu. sociale) → normalisé ≈ 3–6
+    infection_cost: float = 3.0
+
+    # Taux de vaccination max : 0.5 % de la pop / jour
+    max_vacc_rate: float = 0.005
 
 
 @dataclass
 class ProblemConfig:
-    beta: float = 0.27
-    sigma: float = 0.14
-    gamma: float = 0.1
-    mu: float = 0.01
-    dt: float = 1.0
-    max_steps: int = 365
+    """
+    Paramètres épidémiologiques SEIRD (Covid-19, France).
+    Sources : Wu et al. (2020), The Lancet ; rapport projet.tex §2.4.
+    """
+
+    beta: float = 0.27  # Taux de transmission (R0 = β/γ ≈ 2.7)
+    sigma: float = 0.14  # 1 / temps d'incubation (~7 jours)
+    gamma: float = 0.1  # 1 / temps de guérison  (~10 jours)
+    mu: float = 0.01  # Taux de mortalité (1 %)
+    dt: float = 1.0  # Pas de temps (1 jour)
+    max_steps: int = 365  # Horizon (1 an)
     socio_eco_config: SocioEconomicConfig = field(default_factory=SocioEconomicConfig)
-    scale: float = 10.0
 
 
 class SEIREnv(gym.Env):
+    """
+    Environnement Gym SEIRD avec contrôle (confinement, vaccination).
+
+    Simulation complète : [S, E, I, R, D]
+    État utile pour l'agent : [S, E, I]  (obs[:3])
+      → Les équations de S, E, I ne dépendent ni de R ni de D.
+      → Les coûts dépendent de I et des actions uniquement.
+
+    Actions : [u_conf, u_vacc_raw] ∈ [0, 1]²
+      u_vacc effectif = u_vacc_raw × max_vacc_rate
+
+    Reward = −(L_eco + L_vacc + L_deaths + L_infection)
+    Composantes retournées dans info pour analyse.
+    """
+
     def __init__(self, config: ProblemConfig = ProblemConfig()):
         super(SEIREnv, self).__init__()
         self.config = config
         self.current_step = 0
 
-        # Actions: [Confinement (0-1), Vaccination (0-1)]
+        # Actions : [confinement (0-1), vaccination (0-1)]
         self.action_space = spaces.Box(low=0, high=1, shape=(2,), dtype=np.float32)
 
-        # État: [S, E, I, R, D]
+        # Observation : [S, E, I, R, D]
         self.observation_space = spaces.Box(low=0, high=1, shape=(5,), dtype=np.float32)
 
         self.state = None
 
     def step(self, action):
         self.current_step += 1
-        u_conf, u_vacc_raw = action
+        u_conf = float(np.clip(action[0], 0, 1))
+        u_vacc_raw = float(np.clip(action[1], 0, 1))
 
-        # Application du taux max de vaccination
         u_vacc = u_vacc_raw * self.config.socio_eco_config.max_vacc_rate
 
         S, E, I, R, D = self.state
 
-        # --- CALCULS DÉTERMINISTES (POUR LA RÉCOMPENSE) ---
-        # On calcule les flux théoriques pour avoir un signal d'apprentissage propre
-        # sans le bruit aléatoire qui perturbe l'agent.
-
+        # ── Flux déterministes ──
         infection_rate = self.config.beta * (1 - u_conf)
         flow_inf = infection_rate * S * I
         flow_vacc = u_vacc * S
-        flow_death = self.config.gamma * self.config.mu * I  # Flux de décès théorique
+        flow_death = self.config.gamma * self.config.mu * I
 
-        # --- MISE À JOUR DE L'ÉTAT (AVEC BRUIT) ---
-        # Le bruit s'applique à la dynamique de l'environnement, pas à la récompense
-        noise = np.random.normal(0, 1e-5, 5)  # Bruit réduit pour stabilité
+        # ── Mise à jour SEIRD (bruit léger pour stochasticité) ──
+        noise = np.random.normal(0, 1e-5, 5)
 
         new_S = S + self.config.dt * (-flow_inf - flow_vacc) + noise[0]
         new_E = E + self.config.dt * (flow_inf - self.config.sigma * E) + noise[1]
@@ -79,60 +107,45 @@ class SEIREnv(gym.Env):
             * (self.config.gamma * (1 - self.config.mu) * I + flow_vacc)
             + noise[3]
         )
-
-        # Pour D, on s'assure qu'il ne diminue pas
-        new_D = D + self.config.dt * flow_death + noise[4]
-        if new_D < D:
-            new_D = D
+        new_D = max(D, D + self.config.dt * flow_death + noise[4])
 
         self.state = np.clip([new_S, new_E, new_I, new_R, new_D], 0, 1)
-        self.state = (self.state / np.sum(self.state)).astype(np.float32)
+        total = np.sum(self.state)
+        if total > 0:
+            self.state = (self.state / total).astype(np.float32)
 
-        # --- CALCUL DE LA RÉCOMPENSE (PROPRE) ---
+        # ── Récompense (coûts normalisés, voir rapport §2.3) ──
+        cfg = self.config.socio_eco_config
 
-        # Coût économique quadratique
-        L_eco = (
-            self.config.scale
-            * self.config.socio_eco_config.confinement_eco_cost
-            * (u_conf**2)
-        )
-
-        # Coût vaccination
-        L_vacc = (
-            self.config.scale
-            * self.config.socio_eco_config.vaccination_eco_cost
-            * u_vacc_raw
-        )
-
-        # Coût décès : On utilise le FLUX théorique (flow_death)
-        # C'est la dérivée instantanée des morts. C'est un signal très propre pour le gradient.
-        L_deaths = (
-            self.config.scale
-            * self.config.socio_eco_config.life_cost
-            * (flow_death * self.config.dt)
-        )
-
-        # Coût infection (Saturation hôpital)
-        L_infection = (
-            self.config.scale * self.config.socio_eco_config.infection_cost * I
-        )
+        L_eco = cfg.confinement_eco_cost * (u_conf**2)
+        L_vacc = cfg.vaccination_eco_cost * u_vacc_raw
+        L_deaths = cfg.life_cost * (flow_death * self.config.dt)
+        L_infection = cfg.infection_cost * I
 
         reward = -(L_eco + L_vacc + L_deaths + L_infection)
 
-        # Terminaison
         terminated = False
         truncated = self.current_step >= self.config.max_steps
 
-        # Si épidémie éteinte
         if new_I < 1e-4 and new_E < 1e-4:
             terminated = True
             reward += 10.0
 
-        return self.state, float(reward), terminated, truncated, {}
+        return (
+            self.state.copy(),
+            float(reward),
+            terminated,
+            truncated,
+            {
+                "L_eco": L_eco,
+                "L_vacc": L_vacc,
+                "L_deaths": L_deaths,
+                "L_infection": L_infection,
+            },
+        )
 
     def reset(self, seed=None, options=None):
         super().reset(seed=seed)
         self.current_step = 0
-        # Initialisation réaliste
         self.state = np.array([0.98, 0.01, 0.01, 0.0, 0.0], dtype=np.float32)
-        return self.state, {}
+        return self.state.copy(), {}
