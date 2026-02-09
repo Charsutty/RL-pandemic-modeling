@@ -72,6 +72,7 @@ def plot_seird_evolution(results: dict[str, dict], policy_names: list[str]):
         ax.set_title(name, fontweight="bold")
         ax.legend(loc="center right", fontsize=9)
         ax.set_ylim(-0.02, 1.02)
+        ax.set_xlim(0, 365)
 
     axes[-1].set_xlabel("Jours")
     fig.suptitle(
@@ -107,6 +108,9 @@ def plot_commands(results: dict[str, dict], policy_names: list[str]):
         axes[i, 1].set_ylim(-0.05, 1.05)
         axes[i, 1].set_title(f"{name} — Vaccination", fontsize=10)
 
+        for ax in axes[i]:
+            ax.set_xlim(0, 365)
+
     axes[-1, 0].set_xlabel("Jours")
     axes[-1, 1].set_xlabel("Jours")
     fig.suptitle("Commandes appliquées au cours du temps", fontsize=14, y=1.01)
@@ -130,6 +134,9 @@ def plot_epidemic_comparison(results: dict[str, dict], policy_names: list[str]):
         color = cmap(i / max(n_pol, 1))
         ax1.plot(days, h["I"], label=name, color=color, linestyle=ls, linewidth=1.5)
         ax2.plot(days, h["D"], label=name, color=color, linestyle=ls, linewidth=1.5)
+
+    for ax in [ax1, ax2]:
+        ax.set_xlim(0, 365)
 
     ax1.set_title("Courbe épidémique I(t)")
     ax1.set_xlabel("Jours")
@@ -231,6 +238,7 @@ def plot_sensitivity(
                 linewidth=1,
             )
             ax.set_title(f"$C_{{vacc}}$×{m_vacc}, $C_{{hosp}}$×{m_hosp}", fontsize=10)
+            ax.set_xlim(0, 365)
 
             if i == 0 and j == 0:
                 ax.legend(fontsize=7)
