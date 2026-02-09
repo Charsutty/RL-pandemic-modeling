@@ -79,20 +79,25 @@ def record_episode(
     env: gym.Env,
     policy_fn,
     record: bool = True,
+    ignore_termination: bool = False,
 ) -> tuple[float, dict]:
     """Simule un épisode complet et enregistre l'historique.
-
-    A partir de la documentation Gymnasium:
-    https://gymnasium.farama.org/introduction/record_agent/
 
     Args:
         env: Environnement Gymnasium.
         policy_fn: Fonction obs → action (np.ndarray de shape (2,)).
         record: Si True, enregistre l'historique détaillé.
+        ignore_termination: Si True, continue l'épisode jusqu'à max_steps (truncated)
+                            même si l'environnement signale terminated.
     """
     obs, info = env.reset()
     episode_over = False
     total_reward = 0.0
+
+    # Pour ne pas fausser le score retourné, on gèle le total_reward
+    # au moment de la première termination si on continue après.
+    has_terminated = False
+    final_score = 0.0
 
     history = {
         "S": [],
@@ -112,8 +117,18 @@ def record_episode(
     while not episode_over:
         action = policy_fn(obs)
         obs, reward, terminated, truncated, info = env.step(action)
-        episode_over = terminated or truncated
-        total_reward += reward
+
+        if not has_terminated:
+            total_reward += reward
+
+        if terminated and not has_terminated:
+            has_terminated = True
+            final_score = total_reward
+
+        if ignore_termination:
+            episode_over = truncated
+        else:
+            episode_over = terminated or truncated
 
         if record:
             history["S"].append(obs[0])
@@ -133,4 +148,6 @@ def record_episode(
         for k in history:
             history[k] = np.array(history[k])
 
+    if has_terminated:
+        return final_score, history
     return total_reward, history

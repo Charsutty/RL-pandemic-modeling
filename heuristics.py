@@ -43,6 +43,7 @@ def policy_double_seuil(obs: np.ndarray) -> np.ndarray:
     else:
         u_conf = 0.0
 
-    u_vacc = min(1.0, S) if S > 0.3 else 0.25
+    # Vaccination : on utilise 100% de la capacité si S est grand, sinon on ralentit
+    u_vacc = 1.0 if S > 0.3 else 0.25
 
     return np.array([u_conf, u_vacc], dtype=np.float32)
