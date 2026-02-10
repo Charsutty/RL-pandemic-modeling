@@ -1,6 +1,6 @@
 # RL-pandemic-modeling
 
-This repo shows a study of RL methods to respond to a problem of pandemic propagation and regulation through action of $u_{conf}$ for lockdown and $u_{vacc}$ for vaccination level. We use the model S(Sane),E(Exposed),I(Infected),R(Restablished),D(Deceased).
+This repo shows a study of RL methods to respond to a problem of pandemic propagation and regulation through action of $u_{conf}$ for lockdown and $u_{vacc}$ for vaccination level. We use the model S(Sane),E(Exposed),I(Infected),R(Restablished),D(Deceased) $\rightarrow SEIRD$.
 
 Our implementation relies on the [Gymnasium Representation](https://gymnasium.farama.org/).
 
